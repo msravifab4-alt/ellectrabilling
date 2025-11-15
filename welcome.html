@@ -1,0 +1,442 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Welcome – Ellectra Billing</title>
+
+  <!-- TailwindCSS -->
+  <script src="https://cdn.tailwindcss.com"></script>
+
+  <style>
+    body {
+      background: #000; /* black theme */
+    }
+  </style>
+
+  <script type="module">
+    import { initializeApp } from "https://www.gstatic.com/firebasejs/10.12.0/firebase-app.js";
+    import { 
+      getAuth, 
+      onAuthStateChanged, 
+      signOut 
+    } from "https://www.gstatic.com/firebasejs/10.12.0/firebase-auth.js";
+
+    import {
+      getDatabase,
+      ref,
+      push,
+      serverTimestamp,
+      get
+    } from "https://www.gstatic.com/firebasejs/10.12.0/firebase-database.js";
+
+    // Your Firebase config (same as you gave)
+    const firebaseConfig = {
+      apiKey: "AIzaSyC7CyngI18mM-FeWTwNrTizh5SO24wmLBA",
+      authDomain: "illectra-storing.firebaseapp.com",
+      databaseURL: "https://illectra-storing-default-rtdb.firebaseio.com",
+      projectId: "illectra-storing",
+      storageBucket: "illectra-storing.firebasestorage.app",
+      messagingSenderId: "978748469285",
+      appId: "1:978748469285:web:6fbb830864ef53ed5f4fcc"
+    };
+
+    const app = initializeApp(firebaseConfig);
+    const auth = getAuth(app);
+    const db = getDatabase(app);
+
+    let currentUser = null;
+    let itemsCache = [];
+    let itemsLoaded = false;
+    let itemsLoading = false;
+
+    // Protect page & show username
+    onAuthStateChanged(auth, (user) => {
+      if (!user) {
+        window.location.href = "index.html";
+      } else {
+        currentUser = user;
+        document.getElementById("username").textContent = user.displayName || "User";
+      }
+    });
+
+    // Logout
+    window.logout = () => {
+      signOut(auth);
+    };
+
+    // Log module click to Realtime DB
+    function logModuleClick(moduleName) {
+      if (!currentUser) return;
+      const logRef = ref(db, "moduleClicks/" + currentUser.uid);
+      push(logRef, {
+        module: moduleName,
+        at: serverTimestamp()
+      });
+    }
+
+    // Called when a tile is clicked
+    window.openModule = (moduleName, url) => {
+      logModuleClick(moduleName);
+      window.location.href = url;
+    };
+
+    // Load all items once from /items
+    async function loadItemsOnce() {
+      if (itemsLoaded || itemsLoading) return;
+      itemsLoading = true;
+      const itemsRef = ref(db, "items");
+      const snap = await get(itemsRef);
+      itemsCache = [];
+      if (snap.exists()) {
+        snap.forEach((child) => {
+          itemsCache.push({
+            id: child.key,
+            ...child.val()
+          });
+        });
+      }
+      itemsLoaded = true;
+      itemsLoading = false;
+    }
+
+    function renderSearchResults(results) {
+      const container = document.getElementById("searchResults");
+      container.innerHTML = "";
+
+      if (results.length === 0) {
+        container.innerHTML = `
+          <div class="px-3 py-2 text-xs text-gray-400">
+            No matching products.
+          </div>
+        `;
+        return;
+      }
+
+      results.forEach((item) => {
+        const purchase = Number(item.purchasePrice || 0);
+        const selling  = Number(item.sellingPrice || 0);
+        const profit   = selling - purchase;
+
+        const btn = document.createElement("button");
+        btn.type = "button";
+        btn.className =
+          "w-full text-left px-3 py-2 text-sm flex justify-between items-center " +
+          "hover:bg-neutral-800/80 transition";
+        btn.onclick = () => openItemDetails(item);
+
+        const name = item.name || "Unnamed";
+        const code = item.code || "-";
+        const cat  = item.category || "-";
+
+        btn.innerHTML = `
+          <div class="flex flex-col">
+            <span class="text-white font-medium truncate">${name}</span>
+            <span class="text-[11px] text-gray-400">
+              Code: ${code} • ${cat}
+            </span>
+          </div>
+          <div class="text-right text-[11px]">
+            <div>Buy: <span class="text-blue-300">₹${purchase}</span></div>
+            <div>Sell: <span class="text-green-300">₹${selling}</span></div>
+            <div>Profit: <span class="text-yellow-300 font-semibold">₹${profit}</span></div>
+          </div>
+        `;
+
+        container.appendChild(btn);
+      });
+    }
+
+    // Click on item → show professional details card (no alert)
+    window.openItemDetails = (item) => {
+      const panel = document.getElementById("itemDetails");
+      const purchase = Number(item.purchasePrice || 0);
+      const selling  = Number(item.sellingPrice || 0);
+      const profit   = selling - purchase;
+      const imgUrl   = item.imageUrl || "";
+      const created  = item.createdAt
+        ? new Date(item.createdAt).toLocaleString()
+        : "-";
+
+      const safeName = item.name || "";
+      const safeCode = item.code || "";
+      const safeCat  = item.category || "";
+      const qty      = item.qtyAvailable || 0;
+      const minStock = item.minStockAlert || 0;
+
+      const profitColor =
+        profit > 0 ? "text-green-400" :
+        profit < 0 ? "text-red-400"   :
+                     "text-gray-300";
+
+      panel.innerHTML = `
+        <div class="bg-neutral-900 border border-neutral-700 rounded-2xl p-4 mt-3 shadow-xl">
+          <div class="flex items-start">
+            <div class="mr-3">
+              ${
+                imgUrl
+                  ? `<img src="${imgUrl}" class="w-16 h-16 rounded-xl border border-neutral-700 object-cover" />`
+                  : `<div class="w-16 h-16 rounded-xl border border-neutral-700 flex items-center justify-center text-[10px] text-gray-500">
+                       No Image
+                     </div>`
+              }
+            </div>
+            <div class="flex-1">
+              <div class="flex justify-between items-start">
+                <div>
+                  <h2 class="text-lg font-semibold text-white">${safeName}</h2>
+                  <p class="text-[11px] text-gray-400">
+                    Code: <span class="font-mono">${safeCode}</span> • Category: ${safeCat}
+                  </p>
+                </div>
+                <span class="text-[10px] text-gray-500">
+                  Created: ${created}
+                </span>
+              </div>
+
+              <div class="grid grid-cols-3 gap-2 mt-3 text-[11px]">
+                <div class="bg-neutral-800 rounded-lg px-2 py-2">
+                  <div class="text-gray-400">Purchase</div>
+                  <div class="text-blue-300 font-semibold">₹${purchase}</div>
+                </div>
+                <div class="bg-neutral-800 rounded-lg px-2 py-2">
+                  <div class="text-gray-400">Selling</div>
+                  <div class="text-green-300 font-semibold">₹${selling}</div>
+                </div>
+                <div class="bg-neutral-800 rounded-lg px-2 py-2">
+                  <div class="text-gray-400">Profit / item</div>
+                  <div class="${profitColor} font-semibold">₹${profit}</div>
+                </div>
+              </div>
+
+              <div class="grid grid-cols-3 gap-2 mt-3 text-[11px]">
+                <div class="bg-neutral-800 rounded-lg px-2 py-2">
+                  <div class="text-gray-400">Stock</div>
+                  <div class="text-white font-semibold">${qty}</div>
+                </div>
+                <div class="bg-neutral-800 rounded-lg px-2 py-2">
+                  <div class="text-gray-400">Min Alert</div>
+                  <div class="${qty <= minStock ? 'text-red-400' : 'text-gray-200'} font-semibold">
+                    ${minStock}
+                  </div>
+                </div>
+                <div class="bg-neutral-800 rounded-lg px-2 py-2">
+                  <div class="text-gray-400">Total Profit<br>(if all sold)</div>
+                  <div class="${profitColor} font-semibold">
+                    ₹${profit * qty}
+                  </div>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+      `;
+
+      panel.classList.remove("hidden");
+
+      // Scroll to details card (mobile friendly)
+      const y = panel.getBoundingClientRect().top + window.scrollY - 60;
+      window.scrollTo({ top: y, behavior: "smooth" });
+    };
+
+    // 🔍 Search products only (no tile changes)
+    window.filterTiles = async () => {
+      const input = document.getElementById("searchInput");
+      const queryText = input.value.toLowerCase().trim();
+      const resultsDiv = document.getElementById("searchResults");
+      const detailsDiv = document.getElementById("itemDetails");
+
+      // Clear results & details if empty
+      if (!queryText) {
+        resultsDiv.innerHTML = "";
+        detailsDiv.classList.add("hidden");
+        detailsDiv.innerHTML = "";
+        return;
+      }
+
+      try {
+        await loadItemsOnce();
+
+        const results = itemsCache.filter((item) => {
+          const name = (item.name || "").toLowerCase();
+          const code = (item.code || "").toLowerCase();
+          const cat  = (item.category || "").toLowerCase();
+
+          return (
+            name.includes(queryText) ||
+            code.includes(queryText) ||
+            cat.includes(queryText)
+          );
+        });
+
+        renderSearchResults(results);
+        // hide previous details when new search
+        detailsDiv.classList.add("hidden");
+        detailsDiv.innerHTML = "";
+      } catch (err) {
+        console.error("Search error:", err);
+        resultsDiv.innerHTML = `
+          <div class="px-3 py-2 text-xs text-red-400">
+            Error reading products from database.
+          </div>
+        `;
+      }
+    };
+  </script>
+</head>
+
+<body class="min-h-screen p-4 text-white flex flex-col items-center">
+
+  <!-- Top: Logo + User + Logout -->
+  <div class="w-full max-w-md">
+
+    <div class="flex items-center justify-between mb-4">
+      <div class="flex items-center space-x-3">
+        <img 
+          src="https://res.cloudinary.com/dnol5vnde/image/upload/v1763233540/WhatsApp_Image_2025-11-15_at_12.33.16_a6dd51ee_jqxntc.jpg"
+          class="w-14 h-14 rounded-lg shadow"
+          alt="Ellectra Logo"
+        />
+        <div>
+          <h1 class="text-xl font-bold text-yellow-400">ELLECTRA</h1>
+          <p class="text-xs text-gray-400">
+            Welcome, <span id="username" class="font-semibold text-red-400"></span>
+          </p>
+        </div>
+      </div>
+
+      <button
+        onclick="logout()"
+        class="text-xs px-3 py-2 bg-red-600 rounded-lg font-semibold shadow active:scale-95">
+        Logout
+      </button>
+    </div>
+
+    <!-- Search + dropdown results wrapper -->
+    <div class="mb-4">
+      <div class="flex items-center space-x-2">
+        <input
+          id="searchInput"
+          type="text"
+          placeholder="Search product name / code / category..."
+          class="flex-1 px-3 py-2 rounded-lg bg-neutral-900 border border-neutral-700 text-sm focus:outline-none focus:ring-2 focus:ring-yellow-500"
+          oninput="filterTiles()"   <!-- same name as before -->
+        />
+        <button
+          onclick="filterTiles()"
+          class="px-3 py-2 rounded-lg bg-yellow-500 text-black text-sm font-semibold active:scale-95">
+          Search
+        </button>
+      </div>
+
+      <!-- Dropdown-style results -->
+      <div
+        id="searchResults"
+        class="mt-1 bg-neutral-950 border border-neutral-800 rounded-xl shadow-xl max-h-64 overflow-y-auto text-sm hidden-scrollbar">
+      </div>
+    </div>
+
+    <!-- 7 Segment-like Tiles (unchanged) -->
+    <div class="grid grid-cols-2 gap-3 sm:grid-cols-3">
+
+      <!-- 1. Add Item -->
+      <button
+        onclick="openModule('Add Item', 'add.html')"
+        data-keywords="add item product new stock"
+        class="segment-tile">
+        <span class="block text-xs text-gray-300 mb-1">01</span>
+        <span class="block text-sm font-semibold">Add Item</span>
+      </button>
+
+      <!-- 2. Billing – Customer -->
+      <button
+        onclick="openModule('Billing Customer', 'billing.html?mode=customer')"
+        data-keywords="billing customer sale invoice"
+        class="segment-tile">
+        <span class="block text-xs text-gray-300 mb-1">02</span>
+        <span class="block text-sm font-semibold">Billing – Customer</span>
+      </button>
+
+      <!-- 3. Billing – Owner -->
+      <button
+        onclick="openModule('Billing Owner', 'billing.html?mode=owner')"
+        data-keywords="billing owner internal"
+        class="segment-tile">
+        <span class="block text-xs text-gray-300 mb-1">03</span>
+        <span class="block text-sm font-semibold">Billing – Owner</span>
+      </button>
+
+      <!-- 4. Stock Details -->
+      <button
+        onclick="openModule('Stock Details', 'stock-details.html')"
+        data-keywords="stock details quantity items inventory"
+        class="segment-tile">
+        <span class="block text-xs text-gray-300 mb-1">04</span>
+        <span class="block text-sm font-semibold">Stock Details</span>
+      </button>
+
+      <!-- 5. History of Bills -->
+      <button
+        onclick="openModule('History', 'history.html')"
+        data-keywords="history bills old invoices"
+        class="segment-tile">
+        <span class="block text-xs text-gray-300 mb-1">05</span>
+        <span class="block text-sm font-semibold">History of Bills</span>
+      </button>
+
+      <!-- 6. Money Management -->
+      <button
+        onclick="openModule('Money Management', 'money.html')"
+        data-keywords="money management expense income"
+        class="segment-tile">
+        <span class="block text-xs text-gray-300 mb-1">06</span>
+        <span class="block text-sm font-semibold">Money Management</span>
+      </button>
+
+      <!-- 7. Profit Gain -->
+      <button
+        onclick="openModule('Profit Gain', 'profit.html')"
+        data-keywords="profit gain analysis"
+        class="segment-tile col-span-2 sm:col-span-1">
+        <span class="block text-xs text-gray-300 mb-1">07</span>
+        <span class="block text-sm font-semibold">Profit Gain</span>
+      </button>
+    </div>
+
+    <!-- Item details card -->
+    <div id="itemDetails" class="mt-2 hidden"></div>
+
+    <!-- Small hint -->
+    <p class="mt-5 text-[11px] text-gray-500 text-center">
+      7 boxes = modules. Search box = live product search with price & profit 📱
+    </p>
+
+  </div>
+
+  <!-- Custom style for tiles -->
+  <script>
+    // apply Tailwind-like styles to tiles via JS so HTML stays clean
+    document.addEventListener("DOMContentLoaded", () => {
+      document.querySelectorAll(".segment-tile").forEach(tile => {
+        tile.classList.add(
+          "relative",
+          "bg-neutral-900",
+          "border",
+          "border-yellow-500/40",
+          "rounded-xl",
+          "px-3",
+          "py-4",
+          "text-left",
+          "shadow-lg",
+          "active:scale-95",
+          "transition",
+          "duration-150",
+          "hover:border-yellow-400",
+          "hover:shadow-yellow-500/20"
+        );
+      });
+    });
+  </script>
+
+</body>
+</html>

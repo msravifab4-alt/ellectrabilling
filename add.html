@@ -1,0 +1,404 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Add Item – Ellectra</title>
+
+  <!-- Tailwind (dev ok) -->
+  <script src="https://cdn.tailwindcss.com"></script>
+  <style> body { background:#000; } </style>
+
+  <script type="module">
+    // -------- Firebase imports ----------
+    import { initializeApp } from "https://www.gstatic.com/firebasejs/10.12.0/firebase-app.js";
+    import { 
+      getAuth, 
+      onAuthStateChanged 
+    } from "https://www.gstatic.com/firebasejs/10.12.0/firebase-auth.js";
+
+    import {
+      getDatabase,
+      ref,
+      push,
+      set
+    } from "https://www.gstatic.com/firebasejs/10.12.0/firebase-database.js";
+
+    import {
+      getFirestore,
+      collection,
+      addDoc,
+      getDocs,
+      query,
+      orderBy
+    } from "https://www.gstatic.com/firebasejs/10.12.0/firebase-firestore.js";
+
+    // -------- Your Firebase config ----------
+    const firebaseConfig = {
+      apiKey: "AIzaSyC7CyngI18mM-FeWTwNrTizh5SO24wmLBA",
+      authDomain: "illectra-storing.firebaseapp.com",
+      databaseURL: "https://illectra-storing-default-rtdb.firebaseio.com",
+      projectId: "illectra-storing",
+      storageBucket: "illectra-storing.appspot.com",
+      messagingSenderId: "978748469285",
+      appId: "1:978748469285:web:6fbb830864ef53ed5f4fcc"
+    };
+
+    const app = initializeApp(firebaseConfig);
+    const auth = getAuth(app);
+    const rtdb = getDatabase(app);
+    const firestore = getFirestore(app);
+
+    let currentUser = null;
+
+    // -------- Cloudinary config (your real values) ----------
+    const CLOUD_NAME = "debjhzcli";
+    const UPLOAD_PRESET = "electraunsigned";
+
+    // -------- Helper: show status text instead of alert ----------
+    function showStatus(message, type = "info") {
+      const el = document.getElementById("statusMessage");
+      if (!el) return;
+      el.textContent = message || "";
+
+      let base = "mt-2 text-xs";
+      if (type === "success") {
+        el.className = base + " text-green-400";
+      } else if (type === "error") {
+        el.className = base + " text-red-400";
+      } else {
+        el.className = base + " text-gray-300";
+      }
+    }
+
+    // -------- Auth protect ----------
+    onAuthStateChanged(auth, (user) => {
+      if (!user) {
+        showStatus("Not logged in. Redirecting to login...", "error");
+        window.location.href = "index.html";
+      } else {
+        currentUser = user;
+        const userSpan = document.getElementById("username");
+        if (userSpan) userSpan.textContent = user.displayName || user.email || "User";
+        loadCategories();
+      }
+    });
+
+    // -------- Helper: number ----------
+    function toNumber(value) {
+      const n = parseFloat(value);
+      return isNaN(n) ? 0 : n;
+    }
+
+    // -------- Load categories from Firestore ----------
+    async function loadCategories() {
+      const select = document.getElementById("categorySelect");
+      const loadingText = document.getElementById("categoryLoading");
+      if (!select) return;
+
+      select.innerHTML = "";
+      loadingText.textContent = "Loading categories...";
+
+      try {
+        const q = query(collection(firestore, "categories"), orderBy("nameLower"));
+        const snap = await getDocs(q);
+
+        const optDefault = document.createElement("option");
+        optDefault.value = "";
+        optDefault.textContent = "Select category";
+        optDefault.disabled = true;
+        optDefault.selected = true;
+        select.appendChild(optDefault);
+
+        snap.forEach(doc => {
+          const data = doc.data();
+          const opt = document.createElement("option");
+          opt.value = data.name;
+          opt.textContent = data.name;
+          select.appendChild(opt);
+        });
+
+        const optNew = document.createElement("option");
+        optNew.value = "__new__";
+        optNew.textContent = "+ Add new category";
+        select.appendChild(optNew);
+
+        loadingText.textContent = "";
+      } catch (err) {
+        console.error(err);
+        loadingText.textContent = "Failed to load categories";
+      }
+    }
+
+    function handleCategoryChange() {
+      const select = document.getElementById("categorySelect");
+      const newCatBlock = document.getElementById("newCategoryBlock");
+      if (select.value === "__new__") newCatBlock.classList.remove("hidden");
+      else newCatBlock.classList.add("hidden");
+    }
+
+    // -------- Cloudinary upload function ----------
+    async function uploadToCloudinary(file) {
+      const url = `https://api.cloudinary.com/v1_1/${CLOUD_NAME}/image/upload`;
+      const formData = new FormData();
+      formData.append("file", file);
+      formData.append("upload_preset", UPLOAD_PRESET);
+
+      const res = await fetch(url, {
+        method: "POST",
+        body: formData,
+      });
+
+      if (!res.ok) {
+        const errText = await res.text();
+        console.error("Cloudinary error:", errText);
+        throw new Error("Cloudinary upload failed");
+      }
+
+      const data = await res.json();
+      return data.secure_url; // HTTPS url of the image
+    }
+
+    // -------- DOM ready: hook events ----------
+    document.addEventListener("DOMContentLoaded", () => {
+      const categorySelect = document.getElementById("categorySelect");
+      if (categorySelect) {
+        categorySelect.addEventListener("change", handleCategoryChange);
+      }
+
+      const fileInput = document.getElementById("itemImage");
+      const chooseBtn = document.getElementById("chooseImageBtn");
+      const fileNameSpan = document.getElementById("fileName");
+      const previewImg = document.getElementById("imagePreview");
+
+      if (chooseBtn && fileInput) {
+        chooseBtn.addEventListener("click", () => fileInput.click());
+      }
+
+      if (fileInput) {
+        fileInput.addEventListener("change", (e) => {
+          const file = e.target.files[0];
+          if (!file) {
+            fileNameSpan.textContent = "No file chosen";
+            previewImg.classList.add("hidden");
+            previewImg.src = "";
+            return;
+          }
+          fileNameSpan.textContent = file.name;
+
+          const reader = new FileReader();
+          reader.onload = (ev) => {
+            previewImg.src = ev.target.result;
+            previewImg.classList.remove("hidden");
+          };
+          reader.readAsDataURL(file);
+        });
+      }
+    });
+
+    // -------- Save item: upload to Cloudinary + push to RTDB ----------
+    window.saveItem = async (event) => {
+      event.preventDefault();
+      if (!currentUser) {
+        showStatus("User not logged in", "error");
+        return;
+      }
+
+      const name = document.getElementById("itemName").value.trim();
+      const code = document.getElementById("itemCode").value.trim();
+      const categorySelect = document.getElementById("categorySelect");
+      const newCategoryInput = document.getElementById("newCategory");
+      const purchasePrice = toNumber(document.getElementById("purchasePrice").value);
+      const sellingPrice = toNumber(document.getElementById("sellingPrice").value);
+      const qtyAvailable = parseInt(document.getElementById("qtyAvailable").value || "0");
+      const minStockAlert = parseInt(document.getElementById("minStockAlert").value || "0");
+      const imageFile = document.getElementById("itemImage").files[0];
+
+      if (!name) { 
+        showStatus("Please enter item name", "error"); 
+        return; 
+      }
+      if (!code) { 
+        showStatus("Please enter item code", "error"); 
+        return; 
+      }
+
+      let category = categorySelect.value;
+      let createdNewCategory = false;
+
+      if (category === "__new__") {
+        const newCat = newCategoryInput.value.trim();
+        if (!newCat) {
+          showStatus("Please enter new category name", "error");
+          return;
+        }
+        category = newCat;
+        createdNewCategory = true;
+      }
+
+      const saveBtn = document.getElementById("saveBtn");
+      saveBtn.disabled = true;
+      saveBtn.textContent = "Uploading...";
+      showStatus("Saving item...", "info");
+
+      try {
+        // 1) If new category, save once in Firestore
+        if (createdNewCategory) {
+          await addDoc(collection(firestore, "categories"), {
+            name: category,
+            nameLower: category.toLowerCase(),
+            createdBy: currentUser.uid,
+            createdAt: Date.now()
+          });
+        }
+
+        // 2) Upload image to Cloudinary (if selected)
+        let imageUrl = "";
+        if (imageFile) {
+          imageUrl = await uploadToCloudinary(imageFile);
+        }
+
+        // 3) Save item in Realtime Database
+        const itemsRef = ref(rtdb, "items");
+        const newItemRef = push(itemsRef);
+        await set(newItemRef, {
+          name,
+          code,
+          category,
+          purchasePrice,
+          sellingPrice,
+          qtyAvailable,
+          minStockAlert,
+          imageUrl,                 // Cloudinary URL stored here
+          createdBy: currentUser.uid,
+          createdAt: Date.now()
+        });
+
+        showStatus("Item saved successfully ✅", "success");
+
+        // Reset form
+        document.getElementById("addForm").reset();
+        document.getElementById("fileName").textContent = "No file chosen";
+        const previewImg = document.getElementById("imagePreview");
+        previewImg.src = "";
+        previewImg.classList.add("hidden");
+        loadCategories();
+      } catch (err) {
+        console.error(err);
+        showStatus("Error saving item: " + err.message, "error");
+      } finally {
+        saveBtn.disabled = false;
+        saveBtn.textContent = "Save Item";
+      }
+    };
+  </script>
+</head>
+
+<body class="min-h-screen text-white p-4 flex justify-center">
+  <div class="w-full max-w-md">
+    <!-- Header -->
+    <div class="flex items-center justify-between mb-2">
+      <div>
+        <h1 class="text-xl font-bold text-yellow-400">Add Item</h1>
+        <p class="text-[11px] text-gray-400">
+          Logged in as <span id="username" class="font-semibold text-red-400"></span>
+        </p>
+      </div>
+      <a href="welcome.html" class="text-xs text-gray-300 underline">Back</a>
+    </div>
+
+    <!-- Status message line (instead of alerts) -->
+    <p id="statusMessage" class="mt-2 text-xs text-gray-300"></p>
+
+    <!-- Form -->
+    <form id="addForm" onsubmit="saveItem(event)" class="space-y-4 mt-2">
+
+      <div>
+        <label class="block text-sm mb-1">Item Name</label>
+        <input id="itemName" type="text"
+          placeholder="Eg: 10k Resistor"
+          class="w-full px-3 py-2 rounded-lg bg-neutral-900 border border-neutral-700 text-sm"
+          required />
+      </div>
+
+      <div>
+        <label class="block text-sm mb-1">Item Code</label>
+        <input id="itemCode" type="text"
+          placeholder="Eg: R-10K-1/4W"
+          class="w-full px-3 py-2 rounded-lg bg-neutral-900 border border-neutral-700 text-sm"
+          required />
+      </div>
+
+      <div>
+        <label class="block text-sm mb-1">Category</label>
+        <select id="categorySelect"
+          class="w-full px-3 py-2 rounded-lg bg-neutral-900 border border-neutral-700 text-sm">
+          <!-- JS fills options -->
+        </select>
+        <p id="categoryLoading" class="text-[11px] text-gray-500 mt-1"></p>
+      </div>
+
+      <div id="newCategoryBlock" class="hidden">
+        <label class="block text-sm mb-1">New Category Name</label>
+        <input id="newCategory" type="text"
+          placeholder="Eg: Sensors, Connectors"
+          class="w-full px-3 py-2 rounded-lg bg-neutral-900 border border-neutral-700 text-sm" />
+      </div>
+
+      <div class="flex space-x-2">
+        <div class="flex-1">
+          <label class="block text-sm mb-1">Purchase Price</label>
+          <input id="purchasePrice" type="number" step="0.01"
+            placeholder="0.00"
+            class="w-full px-3 py-2 rounded-lg bg-neutral-900 border border-neutral-700 text-sm" />
+        </div>
+        <div class="flex-1">
+          <label class="block text-sm mb-1">Selling Price</label>
+          <input id="sellingPrice" type="number" step="0.01"
+            placeholder="0.00"
+            class="w-full px-3 py-2 rounded-lg bg-neutral-900 border border-neutral-700 text-sm" />
+        </div>
+      </div>
+
+      <div class="flex space-x-2">
+        <div class="flex-1">
+          <label class="block text-sm mb-1">Quantity Available</label>
+          <input id="qtyAvailable" type="number" min="0"
+            placeholder="0"
+            class="w-full px-3 py-2 rounded-lg bg-neutral-900 border border-neutral-700 text-sm" />
+        </div>
+        <div class="flex-1">
+          <label class="block text-sm mb-1">Min Stock Alert</label>
+          <input id="minStockAlert" type="number" min="0"
+            placeholder="0"
+            class="w-full px-3 py-2 rounded-lg bg-neutral-900 border border-neutral-700 text-sm" />
+        </div>
+      </div>
+
+      <!-- Image upload via Cloudinary -->
+      <div>
+        <label class="block text-sm mb-1">Item Image (optional)</label>
+
+        <input id="itemImage" type="file" accept="image/*" class="hidden" />
+
+        <div class="flex items-center space-x-2">
+          <button type="button" id="chooseImageBtn"
+            class="px-3 py-2 text-xs rounded-lg bg-neutral-900 border border-neutral-700 active:scale-95">
+            Choose Image
+          </button>
+          <span id="fileName" class="text-[11px] text-gray-400">No file chosen</span>
+        </div>
+
+        <img id="imagePreview"
+          class="mt-2 w-24 h-24 object-cover rounded-lg border border-neutral-700 hidden"
+          alt="Preview" />
+      </div>
+
+      <button id="saveBtn" type="submit"
+        class="w-full mt-2 py-2 rounded-lg bg-gradient-to-r from-red-600 to-yellow-500 font-semibold text-sm active:scale-95">
+        Save Item
+      </button>
+    </form>
+  </div>
+</body>
+</html>

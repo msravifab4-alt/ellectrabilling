@@ -1,0 +1,44 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Money Management – Ellectra</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <style> body { background:#000; } </style>
+
+  <script type="module">
+    import { initializeApp } from "https://www.gstatic.com/firebasejs/10.12.0/firebase-app.js";
+    import { getAuth, onAuthStateChanged } 
+      from "https://www.gstatic.com/firebasejs/10.12.0/firebase-auth.js";
+
+    const firebaseConfig = {
+      apiKey: "AIzaSyC7CyngI18mM-FeWTwNrTizh5SO24wmLBA",
+      authDomain: "illectra-storing.firebaseapp.com",
+      databaseURL: "https://illectra-storing-default-rtdb.firebaseio.com",
+      projectId: "illectra-storing",
+      storageBucket: "illectra-storing.firebasestorage.app",
+      messagingSenderId: "978748469285",
+      appId: "1:978748469285:web:6fbb830864ef53ed5f4fcc"
+    };
+
+    const app = initializeApp(firebaseConfig);
+    const auth = getAuth(app);
+
+    onAuthStateChanged(auth, (user) => {
+      if (!user) window.location.href = "index.html";
+    });
+
+    // TODO: show expenses / incomes / cash in hand etc.
+  </script>
+</head>
+<body class="min-h-screen text-white p-4 flex justify-center">
+  <div class="w-full max-w-md">
+    <div class="flex items-center justify-between mb-4">
+      <h1 class="text-xl font-bold text-yellow-400">Money Management</h1>
+      <a href="welcome.html" class="text-xs text-gray-300 underline">Back</a>
+    </div>
+    <p class="text-xs text-gray-400">Add money flow, expenses, etc. here...</p>
+  </div>
+</body>
+</html>

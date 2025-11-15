@@ -1,0 +1,98 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Ellectra Billing – Login</title>
+
+  <!-- TailwindCSS -->
+  <script src="https://cdn.tailwindcss.com"></script>
+
+  <style>
+    body {
+      background: #000; /* full black theme to match your logo */
+    }
+  </style>
+
+  <script type="module">
+    import { initializeApp } from "https://www.gstatic.com/firebasejs/10.12.0/firebase-app.js";
+    import { getAuth, GoogleAuthProvider, signInWithPopup } 
+      from "https://www.gstatic.com/firebasejs/10.12.0/firebase-auth.js";
+    import { getDatabase, ref, set } 
+      from "https://www.gstatic.com/firebasejs/10.12.0/firebase-database.js";
+
+    const firebaseConfig = {
+      apiKey: "AIzaSyC7CyngI18mM-FeWTwNrTizh5SO24wmLBA",
+      authDomain: "illectra-storing.firebaseapp.com",
+      databaseURL: "https://illectra-storing-default-rtdb.firebaseio.com",
+      projectId: "illectra-storing",
+      storageBucket: "illectra-storing.firebasestorage.app",
+      messagingSenderId: "978748469285",
+      appId: "1:978748469285:web:6fbb830864ef53ed5f4fcc"
+    };
+
+    const app = initializeApp(firebaseConfig);
+    const auth = getAuth(app);
+    const provider = new GoogleAuthProvider();
+    const db = getDatabase(app);
+
+    window.googleLogin = function () {
+      signInWithPopup(auth, provider)
+      .then((result) => {
+        const user = result.user;
+
+        set(ref(db, "users/" + user.uid), {
+          name: user.displayName,
+          email: user.email,
+          joined: Date.now(),
+        });
+
+        window.location.href = "welcome.html";
+      })
+      .catch((err) => {
+        alert("Login failed: " + err.message);
+      });
+    };
+  </script>
+</head>
+
+<body class="flex items-center justify-center min-h-screen p-6">
+
+  <div class="w-full max-w-sm text-center">
+
+    <!-- Logo -->
+    <img 
+      src="https://res.cloudinary.com/dnol5vnde/image/upload/v1763233540/WhatsApp_Image_2025-11-15_at_12.33.16_a6dd51ee_jqxntc.jpg"
+      class="w-48 mx-auto mb-6 rounded-lg shadow-lg"
+      alt="Ellectra Logo"
+    />
+
+    <!-- App Title -->
+    <h1 class="text-3xl font-bold text-white tracking-wider mb-1">
+      ELLECTRA
+    </h1>
+
+    <p class="text-yellow-400 text-sm mb-8">
+      Smart Billing System
+    </p>
+
+    <!-- Sign in Button -->
+    <button
+      onclick="googleLogin()"
+      class="flex items-center justify-center w-full bg-gradient-to-r 
+             from-red-600 to-yellow-500 text-white py-3 rounded-xl 
+             font-semibold text-lg shadow-lg active:scale-95 transition">
+      <img 
+        src="https://www.svgrepo.com/show/475656/google-color.svg" 
+        class="w-6 mr-3"
+      />
+      Sign in with Google
+    </button>
+
+    <!-- Footer -->
+    <p class="text-gray-400 text-xs mt-6">
+
+    </p>
+  </div>
+</body>
+</html>

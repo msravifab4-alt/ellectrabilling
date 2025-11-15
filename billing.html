@@ -1,0 +1,727 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Customer Billing – Ellectra</title>
+
+  <!-- TailwindCSS -->
+  <script src="https://cdn.tailwindcss.com"></script>
+
+  <!-- jsPDF for invoice PDF -->
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js"></script>
+
+  <style>
+    body { background:#000; }
+    /* hide scrollbar but keep scroll */
+    .hidden-scrollbar::-webkit-scrollbar { display:none; }
+    .hidden-scrollbar { -ms-overflow-style:none; scrollbar-width:none; }
+  </style>
+
+  <script type="module">
+    import { initializeApp } from "https://www.gstatic.com/firebasejs/10.12.0/firebase-app.js";
+    import { 
+      getAuth, 
+      onAuthStateChanged, 
+      signOut 
+    } from "https://www.gstatic.com/firebasejs/10.12.0/firebase-auth.js";
+
+    import {
+      getDatabase,
+      ref,
+      get,
+      push,
+      set,
+      update
+    } from "https://www.gstatic.com/firebasejs/10.12.0/firebase-database.js";
+
+    // -------- Firebase config ----------
+    const firebaseConfig = {
+      apiKey: "AIzaSyC7CyngI18mM-FeWTwNrTizh5SO24wmLBA",
+      authDomain: "illectra-storing.firebaseapp.com",
+      databaseURL: "https://illectra-storing-default-rtdb.firebaseio.com",
+      projectId: "illectra-storing",
+      storageBucket: "illectra-storing.firebasestorage.app",
+      messagingSenderId: "978748469285",
+      appId: "1:978748469285:web:6fbb830864ef53ed5f4fcc"
+    };
+
+    const app = initializeApp(firebaseConfig);
+    const auth = getAuth(app);
+    const db = getDatabase(app);
+
+    const { jsPDF } = window.jspdf;
+
+    let currentUser = null;
+
+    // cache for items
+    let allItems = [];   // [{id, name, code, sellingPrice, qtyAvailable, ...}]
+    let allItemsLoaded = false;
+    let allItemsLoading = false;
+
+    // items in current bill
+    let cart = [];       // [{itemId, name, code, price, qty, maxQty}]
+
+    // ---------- Helpers ----------
+    function setStatus(message, type="info") {
+      const el = document.getElementById("statusMessage");
+      if (!el) return;
+      el.textContent = message || "";
+      let base = "text-xs mt-1";
+      if (type === "error") el.className = base + " text-red-400";
+      else if (type === "success") el.className = base + " text-green-400";
+      else el.className = base + " text-gray-400";
+    }
+
+    function formatCurrency(n) {
+      n = Number(n) || 0;
+      return "₹" + n.toFixed(2);
+    }
+
+    function calcTotals() {
+      let subtotal = 0;
+      cart.forEach(i => {
+        subtotal += i.price * i.qty;
+      });
+      return { subtotal, total: subtotal };
+    }
+
+    function refreshCartUI() {
+      const container = document.getElementById("cartItems");
+      const totalsEl = document.getElementById("totalsText");
+
+      container.innerHTML = "";
+      if (cart.length === 0) {
+        container.innerHTML = `
+          <p class="text-[11px] text-gray-500 mt-1">
+            No components added yet. Use "Add Components" search above.
+          </p>`;
+        totalsEl.textContent = "";
+        return;
+      }
+
+      cart.forEach((item, index) => {
+        const row = document.createElement("div");
+        row.className =
+          "flex items-center justify-between bg-neutral-900 border border-neutral-700 rounded-xl px-3 py-2 text-xs mb-1";
+
+        row.innerHTML = `
+          <div class="flex-1 mr-2">
+            <div class="text-white font-semibold truncate">${item.name}</div>
+            <div class="text-[10px] text-gray-400">
+              Code: <span class="font-mono">${item.code}</span> • In stock: ${item.maxQty}
+            </div>
+            <div class="text-[10px] text-gray-400">
+              Price: ${formatCurrency(item.price)}
+            </div>
+          </div>
+          <div class="flex flex-col items-end gap-1">
+            <div class="flex items-center gap-1">
+              <button
+                type="button"
+                class="px-2 py-1 rounded bg-neutral-800 text-[11px]"
+                data-action="dec"
+                data-index="${index}"
+              >-</button>
+              <input
+                type="number"
+                min="1"
+                max="${item.maxQty}"
+                value="${item.qty}"
+                data-index="${index}"
+                class="w-12 text-center text-[11px] px-1 py-1 rounded bg-neutral-950 border border-neutral-600"
+              />
+              <button
+                type="button"
+                class="px-2 py-1 rounded bg-neutral-800 text-[11px]"
+                data-action="inc"
+                data-index="${index}"
+              >+</button>
+            </div>
+            <div class="text-[10px] text-yellow-300 font-semibold">
+              Line: ${formatCurrency(item.price * item.qty)}
+            </div>
+            <button
+              type="button"
+              class="text-[10px] text-red-400 underline"
+              data-action="remove"
+              data-index="${index}"
+            >Remove</button>
+          </div>
+        `;
+        container.appendChild(row);
+      });
+
+      // attach events
+      container.querySelectorAll("button[data-action]").forEach(btn => {
+        const idx = parseInt(btn.dataset.index);
+        const action = btn.dataset.action;
+        btn.addEventListener("click", () => {
+          if (action === "inc") {
+            if (cart[idx].qty < cart[idx].maxQty) cart[idx].qty++;
+          } else if (action === "dec") {
+            if (cart[idx].qty > 1) cart[idx].qty--;
+          } else if (action === "remove") {
+            cart.splice(idx, 1);
+          }
+          refreshCartUI();
+        });
+      });
+
+      container.querySelectorAll("input[type='number']").forEach(inp => {
+        const idx = parseInt(inp.dataset.index);
+        inp.addEventListener("change", () => {
+          let val = parseInt(inp.value || "1");
+          if (val < 1) val = 1;
+          if (val > cart[idx].maxQty) val = cart[idx].maxQty;
+          cart[idx].qty = val;
+          refreshCartUI();
+        });
+      });
+
+      const { subtotal, total } = calcTotals();
+      totalsEl.textContent = `Items: ${cart.length} • Total: ${formatCurrency(total)}`;
+    }
+
+    // ---------- Load items for search ----------
+    async function loadAllItemsOnce() {
+      if (allItemsLoaded || allItemsLoading) return;
+      allItemsLoading = true;
+      const itemsRef = ref(db, "items");
+      const snap = await get(itemsRef);
+      allItems = [];
+      if (snap.exists()) {
+        snap.forEach(child => {
+          allItems.push({ id: child.key, ...child.val() });
+        });
+      }
+      allItemsLoaded = true;
+      allItemsLoading = false;
+    }
+
+    // ---------- Search & add components ----------
+    window.searchProducts = async () => {
+      const query = document.getElementById("productSearch").value
+        .toLowerCase()
+        .trim();
+      const resultsDiv = document.getElementById("searchResults");
+
+      if (!query) {
+        resultsDiv.innerHTML = "";
+        return;
+      }
+
+      resultsDiv.innerHTML =
+        '<div class="px-3 py-2 text-[11px] text-gray-400">Searching...</div>';
+
+      try {
+        await loadAllItemsOnce();
+        const matches = allItems.filter(item => {
+          const name = (item.name || "").toLowerCase();
+          const code = (item.code || "").toLowerCase();
+          const cat  = (item.category || "").toLowerCase();
+          return (
+            name.includes(query) ||
+            code.includes(query) ||
+            cat.includes(query)
+          );
+        });
+
+        resultsDiv.innerHTML = "";
+        if (matches.length === 0) {
+          resultsDiv.innerHTML =
+            '<div class="px-3 py-2 text-[11px] text-gray-400">No products found.</div>';
+          return;
+        }
+
+        matches.forEach(item => {
+          const price = Number(item.sellingPrice || 0);
+          const stock = Number(item.qtyAvailable || 0);
+          const card = document.createElement("button");
+          card.type = "button";
+          card.className =
+            "w-full flex justify-between items-center text-left px-3 py-2 text-xs hover:bg-neutral-900 transition";
+          card.innerHTML = `
+            <div class="flex-1 mr-2">
+              <div class="text-white font-semibold truncate">
+                ${item.name || "Unnamed"}
+              </div>
+              <div class="text-[10px] text-gray-400">
+                Code: <span class="font-mono">${item.code || "-"}</span> • ${item.category || "-"}
+              </div>
+            </div>
+            <div class="text-right text-[10px]">
+              <div>Price: <span class="text-green-300">${formatCurrency(price)}</span></div>
+              <div>Stock: <span class="${stock <= (item.minStockAlert||0) ? "text-red-400" : "text-gray-300"}">
+                ${stock}
+              </span></div>
+            </div>
+          `;
+          card.addEventListener("click", () => addToCart(item));
+          resultsDiv.appendChild(card);
+        });
+      } catch (err) {
+        console.error(err);
+        resultsDiv.innerHTML =
+          '<div class="px-3 py-2 text-[11px] text-red-400">Error searching items.</div>';
+      }
+    };
+
+    function addToCart(item) {
+      const existing = cart.find(c => c.itemId === item.id);
+      const maxQty = Number(item.qtyAvailable || 0);
+      if (maxQty <= 0) {
+        setStatus("No stock available for " + (item.name || ""), "error");
+        return;
+      }
+
+      if (existing) {
+        if (existing.qty < existing.maxQty) {
+          existing.qty++;
+        }
+      } else {
+        cart.push({
+          itemId: item.id,
+          name: item.name || "",
+          code: item.code || "",
+          price: Number(item.sellingPrice || 0),
+          qty: 1,
+          maxQty
+        });
+      }
+      setStatus("", "info");
+      refreshCartUI();
+    }
+
+    // ---------- Auth ----------
+    onAuthStateChanged(auth, (user) => {
+      if (!user) {
+        window.location.href = "index.html";
+      } else {
+        currentUser = user;
+        document.getElementById("userNameTop").textContent =
+          user.displayName || user.email || "User";
+      }
+    });
+
+    window.logout = () => {
+      signOut(auth);
+    };
+
+    // ---------- College type switch ----------
+    window.handleCollegeChange = () => {
+      const collegeSelect = document.getElementById("collegeSelect");
+      const msecBlock = document.getElementById("msecBlock");
+      const otherBlock = document.getElementById("otherBlock");
+      const addressField = document.getElementById("addressField");
+
+      if (collegeSelect.value === "MSEC") {
+        msecBlock.classList.remove("hidden");
+        otherBlock.classList.add("hidden");
+        addressField.value = "MSEC";
+        addressField.readOnly = true;
+      } else if (collegeSelect.value === "OTHER") {
+        msecBlock.classList.add("hidden");
+        otherBlock.classList.remove("hidden");
+        addressField.value = "";
+        addressField.readOnly = false;
+      }
+    };
+
+    // ---------- Build invoice object from form & cart ----------
+    function buildInvoiceData() {
+      const customerName = document.getElementById("customerName").value.trim();
+      const collegeSelect = document.getElementById("collegeSelect").value;
+      const phone = document.getElementById("phone").value.trim();
+
+      if (!customerName) {
+        setStatus("Customer name is required.", "error");
+        return null;
+      }
+      if (!collegeSelect) {
+        setStatus("Select college / customer type.", "error");
+        return null;
+      }
+      if (cart.length === 0) {
+        setStatus("Add at least one component to the bill.", "error");
+        return null;
+      }
+
+      let collegeInfo = { type: collegeSelect };
+
+      if (collegeSelect === "MSEC") {
+        collegeInfo.dept = document.getElementById("dept").value.trim();
+        collegeInfo.year = document.getElementById("year").value.trim();
+        collegeInfo.number = document.getElementById("studentNumber").value.trim();
+        collegeInfo.address = "MSEC";
+      } else {
+        collegeInfo.address = document.getElementById("addressField").value.trim();
+        collegeInfo.landmark = document.getElementById("landmark").value.trim();
+        collegeInfo.mapLocation = document.getElementById("mapLocation").value.trim();
+      }
+
+      const { subtotal, total } = calcTotals();
+      const now = new Date();
+      const billTime = now.toISOString();
+      const billNumber = "C" + now.getTime(); // simple bill id
+
+      return {
+        billNumber,
+        customerName,
+        phone,
+        collegeInfo,
+        items: cart.map(c => ({
+          itemId: c.itemId,
+          name: c.name,
+          code: c.code,
+          qty: c.qty,
+          price: c.price,
+          lineTotal: c.price * c.qty
+        })),
+        subtotal,
+        total,
+        createdAt: billTime,
+        createdBy: currentUser ? currentUser.uid : null
+      };
+    }
+
+    // ---------- Save invoice, update stock, generate PDF ----------
+    window.generateInvoice = async () => {
+      setStatus("", "info");
+
+      const invoice = buildInvoiceData();
+      if (!invoice) return;
+
+      // basic stock check again
+      for (const line of invoice.items) {
+        const item = allItems.find(i => i.id === line.itemId);
+        const avail = Number(item?.qtyAvailable || 0);
+        if (line.qty > avail) {
+          setStatus(`Not enough stock for ${line.name}. Available: ${avail}`, "error");
+          return;
+        }
+      }
+
+      const btn = document.getElementById("generateBtn");
+      btn.disabled = true;
+      btn.textContent = "Processing...";
+
+      try {
+        // 1) Save bill in RTDB
+        const billsRef = ref(db, "customerBills");
+        const newBillRef = push(billsRef);
+        await set(newBillRef, invoice);
+
+        // 2) Update stock
+        const updates = {};
+        invoice.items.forEach(line => {
+          const item = allItems.find(i => i.id === line.itemId);
+          const avail = Number(item.qtyAvailable || 0);
+          const newQty = Math.max(0, avail - line.qty);
+          updates[`items/${line.itemId}/qtyAvailable`] = newQty;
+        });
+        await update(ref(db), updates);
+
+        // 3) Generate PDF
+        const doc = new jsPDF({
+          orientation: "p",
+          unit: "mm",
+          format: "a4"
+        });
+
+        const lineHeight = 6;
+        let y = 10;
+
+        doc.setFontSize(16);
+        doc.text("ELLECTRA", 10, y);
+        doc.setFontSize(10);
+        y += lineHeight;
+        doc.text("Smart Billing System", 10, y);
+        y += lineHeight;
+        doc.text("Customer Invoice", 10, y);
+
+        doc.setFontSize(10);
+        y += lineHeight * 1.5;
+        doc.text(`Bill No: ${invoice.billNumber}`, 10, y);
+        y += lineHeight;
+        doc.text(`Date: ${new Date(invoice.createdAt).toLocaleString()}`, 10, y);
+
+        // customer details
+        y += lineHeight * 1.5;
+        doc.setFontSize(11);
+        doc.text("Customer Details", 10, y);
+        doc.setFontSize(10);
+        y += lineHeight;
+        doc.text(`Name: ${invoice.customerName}`, 10, y);
+        y += lineHeight;
+        if (invoice.phone) {
+          doc.text(`Phone: ${invoice.phone}`, 10, y);
+          y += lineHeight;
+        }
+
+        if (invoice.collegeInfo.type === "MSEC") {
+          doc.text("College: Meenakshi Sundararajan Engineering College (MSEC)", 10, y);
+          y += lineHeight;
+          doc.text(`Dept: ${invoice.collegeInfo.dept || "-"}`, 10, y);
+          y += lineHeight;
+          doc.text(`Year: ${invoice.collegeInfo.year || "-"}`, 10, y);
+          y += lineHeight;
+          doc.text(`Number: ${invoice.collegeInfo.number || "-"}`, 10, y);
+          y += lineHeight;
+        } else {
+          doc.text("Customer Type: Other", 10, y);
+          y += lineHeight;
+          doc.text(`Address: ${invoice.collegeInfo.address || "-"}`, 10, y);
+          y += lineHeight;
+          doc.text(`Landmark: ${invoice.collegeInfo.landmark || "-"}`, 10, y);
+          y += lineHeight;
+          if (invoice.collegeInfo.mapLocation) {
+            doc.text(`Map Location: ${invoice.collegeInfo.mapLocation}`, 10, y);
+            y += lineHeight;
+          }
+        }
+
+        // items table header
+        y += lineHeight;
+        doc.setFontSize(11);
+        doc.text("Items", 10, y);
+        y += lineHeight;
+        doc.setFontSize(9);
+        doc.text("S.No", 10, y);
+        doc.text("Item", 20, y);
+        doc.text("Code", 80, y);
+        doc.text("Qty", 115, y);
+        doc.text("Rate", 135, y);
+        doc.text("Amount", 165, y);
+
+        // table rows
+        y += lineHeight;
+        doc.setFontSize(9);
+        invoice.items.forEach((line, idx) => {
+          if (y > 270) {
+            doc.addPage();
+            y = 10;
+          }
+          doc.text(String(idx + 1), 10, y);
+          doc.text(line.name.substring(0, 25), 20, y);
+          doc.text(line.code.substring(0, 15), 80, y);
+          doc.text(String(line.qty), 115, y);
+          doc.text(line.price.toFixed(2), 135, y, { align: "right" });
+          doc.text((line.lineTotal).toFixed(2), 190, y, { align: "right" });
+          y += lineHeight;
+        });
+
+        // totals
+        y += lineHeight;
+        doc.setFontSize(10);
+        doc.text(`Total: ${invoice.total.toFixed(2)}`, 150, y, { align: "right" });
+
+        y += lineHeight * 2;
+        doc.setFontSize(8);
+        doc.text("Thank you for your purchase!", 10, y);
+
+        doc.save(`Ellectra_Invoice_${invoice.billNumber}.pdf`);
+
+        setStatus("Invoice saved and stock updated ✅", "success");
+
+        // reset cart, but keep customer info
+        cart = [];
+        refreshCartUI();
+        document.getElementById("searchResults").innerHTML = "";
+        document.getElementById("productSearch").value = "";
+
+        // reload items to get updated stock
+        allItemsLoaded = false;
+        await loadAllItemsOnce();
+      } catch (err) {
+        console.error(err);
+        setStatus("Error during billing process: " + err.message, "error");
+      } finally {
+        btn.disabled = false;
+        btn.textContent = "Generate Invoice PDF & Save";
+      }
+    };
+  </script>
+</head>
+<body class="min-h-screen text-white p-3 flex justify-center">
+  <div class="w-full max-w-md">
+    <!-- Top bar -->
+    <div class="flex items-center justify-between mb-3">
+      <div>
+        <h1 class="text-xl font-bold text-yellow-400">Customer Billing</h1>
+        <p class="text-[11px] text-gray-400">
+          Logged in as <span id="userNameTop" class="font-semibold text-red-400"></span>
+        </p>
+      </div>
+      <div class="flex flex-col items-end space-y-1">
+        <a href="welcome.html" class="text-[11px] text-gray-300 underline">Back</a>
+        <button
+          onclick="logout()"
+          class="text-[10px] px-2 py-1 bg-red-600 rounded-lg font-semibold shadow">
+          Logout
+        </button>
+      </div>
+    </div>
+
+    <p id="statusMessage" class="text-xs text-gray-400 mb-2"></p>
+
+    <!-- Customer details -->
+    <div class="bg-neutral-950 border border-neutral-800 rounded-2xl p-3 mb-3">
+      <h2 class="text-sm font-semibold text-yellow-300 mb-2">Customer Details</h2>
+
+      <div class="space-y-2 text-xs">
+        <div>
+          <label class="block mb-1">Customer Name</label>
+          <input
+            id="customerName"
+            type="text"
+            placeholder="Eg: Pradeep"
+            class="w-full px-3 py-2 rounded-lg bg-neutral-900 border border-neutral-700"
+          />
+        </div>
+
+        <div>
+          <label class="block mb-1">Phone (optional)</label>
+          <input
+            id="phone"
+            type="tel"
+            placeholder="Eg: 9876543210"
+            class="w-full px-3 py-2 rounded-lg bg-neutral-900 border border-neutral-700"
+          />
+        </div>
+
+        <div>
+          <label class="block mb-1">Customer Type / College</label>
+          <select
+            id="collegeSelect"
+            class="w-full px-3 py-2 rounded-lg bg-neutral-900 border border-neutral-700"
+            onchange="handleCollegeChange()"
+          >
+            <option value="">Select</option>
+            <option value="MSEC">Meenakshi Sundararajan Engineering College</option>
+            <option value="OTHER">Other</option>
+          </select>
+        </div>
+
+        <!-- MSEC extra fields -->
+        <div id="msecBlock" class="space-y-2 hidden">
+          <div class="flex gap-2">
+            <div class="flex-1">
+              <label class="block mb-1">Department</label>
+              <input
+                id="dept"
+                type="text"
+                placeholder="Eg: ECE"
+                class="w-full px-3 py-2 rounded-lg bg-neutral-900 border border-neutral-700"
+              />
+            </div>
+            <div class="flex-1">
+              <label class="block mb-1">Year</label>
+              <select
+                id="year"
+                class="w-full px-3 py-2 rounded-lg bg-neutral-900 border border-neutral-700"
+              >
+                <option value="">Select</option>
+                <option value="I">I</option>
+                <option value="II">II</option>
+                <option value="III">III</option>
+                <option value="IV">IV</option>
+              </select>
+            </div>
+          </div>
+
+          <div>
+            <label class="block mb-1">Number (Roll / Reg / ID)</label>
+            <input
+              id="studentNumber"
+              type="text"
+              placeholder="Eg: 21ECE123"
+              class="w-full px-3 py-2 rounded-lg bg-neutral-900 border border-neutral-700"
+            />
+          </div>
+        </div>
+
+        <!-- Other customer fields -->
+        <div id="otherBlock" class="space-y-2 hidden">
+          <div>
+            <label class="block mb-1">Address</label>
+            <textarea
+              id="addressField"
+              rows="2"
+              class="w-full px-3 py-2 rounded-lg bg-neutral-900 border border-neutral-700 resize-none"
+              placeholder="Customer address"
+            ></textarea>
+          </div>
+          <div>
+            <label class="block mb-1">Landmark</label>
+            <input
+              id="landmark"
+              type="text"
+              placeholder="Eg: Near bus stop"
+              class="w-full px-3 py-2 rounded-lg bg-neutral-900 border border-neutral-700"
+            />
+          </div>
+          <div>
+            <label class="block mb-1">Map Location (coords / link, optional)</label>
+            <input
+              id="mapLocation"
+              type="text"
+              placeholder="Eg: 13.08, 80.25 or Google Maps link"
+              class="w-full px-3 py-2 rounded-lg bg-neutral-900 border border-neutral-700"
+            />
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Add components -->
+    <div class="bg-neutral-950 border border-neutral-800 rounded-2xl p-3 mb-3">
+      <div class="flex items-center justify-between mb-2">
+        <h2 class="text-sm font-semibold text-yellow-300">Add Components</h2>
+        <span class="text-[10px] text-gray-500">
+          Search & tap to add
+        </span>
+      </div>
+
+      <div class="flex items-center gap-2 mb-2">
+        <input
+          id="productSearch"
+          type="text"
+          placeholder="Search by name / code / category"
+          class="flex-1 px-3 py-2 rounded-lg bg-neutral-900 border border-neutral-700 text-xs"
+          oninput="searchProducts()"
+        />
+        <button
+          type="button"
+          onclick="searchProducts()"
+          class="px-3 py-2 rounded-lg bg-yellow-500 text-black text-[11px] font-semibold active:scale-95">
+          Search
+        </button>
+      </div>
+
+      <div
+        id="searchResults"
+        class="bg-neutral-950 border border-neutral-800 rounded-xl max-h-40 overflow-y-auto hidden-scrollbar text-xs"
+      ></div>
+    </div>
+
+    <!-- Cart -->
+    <div class="bg-neutral-950 border border-neutral-800 rounded-2xl p-3 mb-3">
+      <div class="flex items-center justify-between mb-2">
+        <h2 class="text-sm font-semibold text-yellow-300">Bill Items</h2>
+        <span id="totalsText" class="text-[11px] text-gray-400"></span>
+      </div>
+      <div id="cartItems" class="text-xs"></div>
+    </div>
+
+    <!-- Generate invoice -->
+    <button
+      id="generateBtn"
+      type="button"
+      onclick="generateInvoice()"
+      class="w-full py-2 rounded-lg bg-gradient-to-r from-red-600 to-yellow-500 font-semibold text-xs active:scale-95 mb-2">
+      Generate Invoice PDF & Save
+    </button>
+  </div>
+</body>
+</html>

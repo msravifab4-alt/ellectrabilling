@@ -1,0 +1,545 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Stock Details – Ellectra</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <style>
+    body { background:#000; }
+  </style>
+
+  <script type="module">
+    import { initializeApp } from "https://www.gstatic.com/firebasejs/10.12.0/firebase-app.js";
+    import { getAuth, onAuthStateChanged } 
+      from "https://www.gstatic.com/firebasejs/10.12.0/firebase-auth.js";
+    import { 
+      getDatabase,
+      ref,
+      onValue,
+      update
+    } from "https://www.gstatic.com/firebasejs/10.12.0/firebase-database.js";
+
+    // -------- Firebase config ----------
+    const firebaseConfig = {
+      apiKey: "AIzaSyC7CyngI18mM-FeWTwNrTizh5SO24wmLBA",
+      authDomain: "illectra-storing.firebaseapp.com",
+      databaseURL: "https://illectra-storing-default-rtdb.firebaseio.com",
+      projectId: "illectra-storing",
+      storageBucket: "illectra-storing.firebasestorage.app",
+      messagingSenderId: "978748469285",
+      appId: "1:978748469285:web:6fbb830864ef53ed5f4fcc"
+    };
+
+    const app = initializeApp(firebaseConfig);
+    const auth = getAuth(app);
+    const db = getDatabase(app);
+
+    // -------- Cloudinary config (your real values) ----------
+    const CLOUD_NAME = "debjhzcli";
+    const UPLOAD_PRESET = "electraunsigned";
+
+    // Globals for editing
+    let itemsMap = {};      // id -> item data
+    let editingId = null;
+    let currentImageUrl = "";
+    let newImageFile = null;
+
+    function setStatus(msg, type = "info") {
+      const el = document.getElementById("statusMessage");
+      if (!el) return;
+      el.textContent = msg || "";
+      let base = "text-xs mt-1";
+      if (type === "error") el.className = base + " text-red-400";
+      else if (type === "success") el.className = base + " text-green-400";
+      else el.className = base + " text-gray-400";
+    }
+
+    function setEditStatus(msg, type = "info") {
+      const el = document.getElementById("editStatus");
+      if (!el) return;
+      el.textContent = msg || "";
+      let base = "text-[11px] mt-1";
+      if (type === "error") el.className = base + " text-red-400";
+      else if (type === "success") el.className = base + " text-green-400";
+      else el.className = base + " text-gray-400";
+    }
+
+    // ---------- Image popup helpers ----------
+    window.openImageModal = (url) => {
+      const modal = document.getElementById("imageModal");
+      const img = document.getElementById("popupImage");
+      if (!modal || !img) return;
+      img.src = url;
+      modal.classList.remove("hidden");
+    };
+
+    window.closeImageModal = (event) => {
+      const modal = document.getElementById("imageModal");
+      if (!modal) return;
+      // close if clicking backdrop or close button
+      if (event.target.id === "imageModal" || event.target.id === "closeImageBtn") {
+        modal.classList.add("hidden");
+      }
+    };
+
+    onAuthStateChanged(auth, (user) => {
+      if (!user) {
+        window.location.href = "index.html";
+      } else {
+        loadStock();
+      }
+    });
+
+    // -------- Load and render stock grouped by category ----------
+    function loadStock() {
+      const itemsRef = ref(db, "items");
+      const container = document.getElementById("stockContainer");
+
+      onValue(itemsRef, (snap) => {
+        container.innerHTML = "";
+        itemsMap = {};
+
+        if (!snap.exists()) {
+          setStatus("No items found in stock.", "info");
+          document.getElementById("summaryText").textContent = "";
+          return;
+        }
+        setStatus("");
+
+        const categoriesMap = {};
+        let totalItems = 0;
+
+        snap.forEach((child) => {
+          const data = child.val();
+          const id = child.key;
+          itemsMap[id] = { id, ...data };
+
+          const category = (data.category || "Uncategorized").toString();
+          if (!categoriesMap[category]) categoriesMap[category] = [];
+          categoriesMap[category].push(itemsMap[id]);
+          totalItems++;
+        });
+
+        document.getElementById("summaryText").textContent =
+          `Total items: ${totalItems} • Categories: ${Object.keys(categoriesMap).length}`;
+
+        const categoryNames = Object.keys(categoriesMap).sort((a, b) =>
+          a.toLowerCase().localeCompare(b.toLowerCase())
+        );
+
+        categoryNames.forEach((catName) => {
+          const section = document.createElement("section");
+          section.className = "mb-4";
+
+          section.innerHTML = `
+            <div class="flex items-center justify-between mb-2">
+              <h2 class="text-sm font-semibold text-yellow-300 uppercase tracking-wide">
+                ${catName}
+              </h2>
+              <span class="text-[11px] text-gray-500">
+                ${categoriesMap[catName].length} item(s)
+              </span>
+            </div>
+          `;
+
+          const list = document.createElement("div");
+          list.className = "space-y-2";
+
+          categoriesMap[catName]
+            .sort((a, b) => (a.name || "").localeCompare(b.name || ""))
+            .forEach((item) => {
+              const purchase = Number(item.purchasePrice || 0);
+              const selling  = Number(item.sellingPrice || 0);
+              const profit   = selling - purchase;
+              const qty      = Number(item.qtyAvailable || 0);
+              const minStock = Number(item.minStockAlert || 0);
+              const lowStock = qty <= minStock && minStock > 0;
+
+              const card = document.createElement("div");
+              card.className =
+                "flex items-center justify-between rounded-xl border px-3 py-2 text-xs " +
+                (lowStock
+                  ? "border-red-500/60 bg-red-900/10"
+                  : "border-neutral-700 bg-neutral-900");
+
+              const imgUrl = item.imageUrl || "";
+              const imgPart = imgUrl
+                ? `<img src="${imgUrl}" class="w-10 h-10 rounded-lg border border-neutral-700 object-cover mr-2 cursor-pointer hover:scale-105 transition"
+                       onclick="openImageModal('${imgUrl}')"/>`
+                : `<div class="w-10 h-10 rounded-lg border border-neutral-700 flex items-center justify-center text-[9px] text-gray-500 mr-2">No Img</div>`;
+
+              card.innerHTML = `
+                <div class="flex items-center">
+                  ${imgPart}
+                  <div>
+                    <div class="text-white font-semibold truncate max-w-[150px]">
+                      ${item.name || "Unnamed"}
+                    </div>
+                    <div class="text-[10px] text-gray-400">
+                      Code: <span class="font-mono">${item.code || "-"}</span>
+                    </div>
+                    <div class="text-[10px] text-gray-400">
+                      Qty: <span class="${lowStock ? "text-red-400 font-semibold" : "text-gray-200"}">${qty}</span>
+                      &nbsp; • Min: ${minStock || 0}
+                    </div>
+                  </div>
+                </div>
+                <div class="flex flex-col items-end gap-1 text-[10px]">
+                  <div>Buy: <span class="text-blue-300">₹${purchase}</span></div>
+                  <div>Sell: <span class="text-green-300">₹${selling}</span></div>
+                  <div>Profit: <span class="${profit > 0 ? "text-yellow-300" : profit < 0 ? "text-red-300" : "text-gray-300"} font-semibold">
+                    ₹${profit}
+                  </span></div>
+                  <button
+                    type="button"
+                    class="mt-1 px-2 py-1 rounded-lg bg-neutral-800 border border-neutral-600 text-[10px] hover:bg-neutral-700 active:scale-95"
+                    data-id="${item.id}"
+                  >
+                    Edit
+                  </button>
+                </div>
+              `;
+
+              list.appendChild(card);
+            });
+
+          section.appendChild(list);
+          container.appendChild(section);
+        });
+
+        // Attach edit button listeners
+        container.querySelectorAll("button[data-id]").forEach((btn) => {
+          btn.addEventListener("click", () => {
+            const id = btn.getAttribute("data-id");
+            startEdit(id);
+          });
+        });
+      }, (err) => {
+        console.error(err);
+        setStatus("Error loading stock data.", "error");
+      });
+    }
+
+    // -------- Cloudinary upload helper ----------
+    async function uploadToCloudinary(file) {
+      const url = `https://api.cloudinary.com/v1_1/${CLOUD_NAME}/image/upload`;
+      const formData = new FormData();
+      formData.append("file", file);
+      formData.append("upload_preset", UPLOAD_PRESET);
+
+      const res = await fetch(url, {
+        method: "POST",
+        body: formData,
+      });
+
+      if (!res.ok) {
+        const errText = await res.text();
+        console.error("Cloudinary error:", errText);
+        throw new Error("Cloudinary upload failed");
+      }
+
+      const data = await res.json();
+      return data.secure_url;
+    }
+
+    // -------- Start editing a specific item ----------
+    window.startEdit = (id) => {
+      const item = itemsMap[id];
+      if (!item) return;
+
+      editingId = id;
+      newImageFile = null;
+      currentImageUrl = item.imageUrl || "";
+
+      // Fill form fields
+      document.getElementById("editName").value = item.name || "";
+      document.getElementById("editCode").value = item.code || "";
+      document.getElementById("editCategory").value = item.category || "";
+      document.getElementById("editPurchasePrice").value = item.purchasePrice || "";
+      document.getElementById("editSellingPrice").value = item.sellingPrice || "";
+      document.getElementById("editQty").value = item.qtyAvailable || "";
+      document.getElementById("editMinStock").value = item.minStockAlert || "";
+
+      const img = document.getElementById("editImagePreview");
+      if (currentImageUrl) {
+        img.src = currentImageUrl;
+        img.classList.remove("hidden");
+      } else {
+        img.src = "";
+        img.classList.add("hidden");
+      }
+
+      document.getElementById("editFileName").textContent = "No new file chosen";
+
+      // Show panel
+      const panel = document.getElementById("editPanel");
+      panel.classList.remove("hidden");
+      setEditStatus(`Editing: ${item.name || ""}`, "info");
+
+      // Scroll to panel
+      const y = panel.getBoundingClientRect().top + window.scrollY - 60;
+      window.scrollTo({ top: y, behavior: "smooth" });
+    };
+
+    // -------- Cancel editing ----------
+    window.cancelEdit = () => {
+      editingId = null;
+      newImageFile = null;
+      currentImageUrl = "";
+      document.getElementById("editForm").reset();
+      document.getElementById("editImagePreview").classList.add("hidden");
+      document.getElementById("editFileName").textContent = "No new file chosen";
+      document.getElementById("editPanel").classList.add("hidden");
+      setEditStatus("", "info");
+    };
+
+    // -------- Handle DOM for image choose ----------
+    document.addEventListener("DOMContentLoaded", () => {
+      const chooseBtn = document.getElementById("editChooseImageBtn");
+      const fileInput = document.getElementById("editImageFile");
+      const fileNameSpan = document.getElementById("editFileName");
+      const previewImg = document.getElementById("editImagePreview");
+
+      if (chooseBtn && fileInput) {
+        chooseBtn.addEventListener("click", () => fileInput.click());
+      }
+
+      if (fileInput) {
+        fileInput.addEventListener("change", (e) => {
+          const file = e.target.files[0];
+          if (!file) {
+            newImageFile = null;
+            fileNameSpan.textContent = "No new file chosen";
+            previewImg.classList.add("hidden");
+            previewImg.src = currentImageUrl || "";
+            if (currentImageUrl) previewImg.classList.remove("hidden");
+            return;
+          }
+
+          newImageFile = file;
+          fileNameSpan.textContent = file.name;
+
+          const reader = new FileReader();
+          reader.onload = (ev) => {
+            previewImg.src = ev.target.result;
+            previewImg.classList.remove("hidden");
+          };
+          reader.readAsDataURL(file);
+        });
+      }
+
+      // Make edit preview image also open in popup when clicked
+      previewImg.addEventListener("click", () => {
+        if (previewImg.src) {
+          window.openImageModal(previewImg.src);
+        }
+      });
+    });
+
+    // -------- Save changes ----------
+    window.saveEdit = async (event) => {
+      event.preventDefault();
+      if (!editingId) {
+        setEditStatus("No item selected for editing.", "error");
+        return;
+      }
+
+      const name = document.getElementById("editName").value.trim();
+      const code = document.getElementById("editCode").value.trim();
+      const category = document.getElementById("editCategory").value.trim();
+      const purchasePrice = parseFloat(document.getElementById("editPurchasePrice").value || "0");
+      const sellingPrice = parseFloat(document.getElementById("editSellingPrice").value || "0");
+      const qty = parseInt(document.getElementById("editQty").value || "0");
+      const minStock = parseInt(document.getElementById("editMinStock").value || "0");
+
+      if (!name) {
+        setEditStatus("Item name is required.", "error");
+        return;
+      }
+      if (!code) {
+        setEditStatus("Item code is required.", "error");
+        return;
+      }
+
+      const saveBtn = document.getElementById("editSaveBtn");
+      saveBtn.disabled = true;
+      saveBtn.textContent = "Saving...";
+      setEditStatus("Saving changes...", "info");
+
+      try {
+        let imageUrlToUse = currentImageUrl;
+
+        if (newImageFile) {
+          imageUrlToUse = await uploadToCloudinary(newImageFile);
+        }
+
+        const itemRef = ref(db, "items/" + editingId);
+        await update(itemRef, {
+          name,
+          code,
+          category,
+          purchasePrice,
+          sellingPrice,
+          qtyAvailable: qty,
+          minStockAlert: minStock,
+          imageUrl: imageUrlToUse,
+          updatedAt: Date.now()
+        });
+
+        setEditStatus("Item updated successfully ✅", "success");
+        // list auto refreshes via onValue
+      } catch (err) {
+        console.error(err);
+        setEditStatus("Error updating item: " + err.message, "error");
+      } finally {
+        saveBtn.disabled = false;
+        saveBtn.textContent = "Save Changes";
+      }
+    };
+  </script>
+</head>
+<body class="min-h-screen text-white p-4 flex justify-center">
+  <div class="w-full max-w-md">
+    <!-- Header -->
+    <div class="flex items-center justify-between mb-1">
+      <div>
+        <h1 class="text-xl font-bold text-yellow-400">Stock Details</h1>
+        <p id="summaryText" class="text-[11px] text-gray-400 mt-1"></p>
+      </div>
+      <a href="welcome.html" class="text-xs text-gray-300 underline">
+        Back
+      </a>
+    </div>
+
+    <!-- Status line -->
+    <p id="statusMessage" class="text-xs text-gray-400 mt-1"></p>
+
+    <!-- Stock grouped by category -->
+    <div id="stockContainer" class="mt-3"></div>
+
+    <!-- Edit Panel -->
+    <div id="editPanel" class="mt-4 hidden">
+      <div class="bg-neutral-950 border border-neutral-700 rounded-2xl p-4 shadow-xl">
+        <div class="flex items-center justify-between mb-2">
+          <h2 class="text-sm font-semibold text-yellow-300 tracking-wide">
+            Edit Item
+          </h2>
+          <button
+            type="button"
+            onclick="cancelEdit()"
+            class="text-[11px] text-gray-400 underline">
+            Cancel
+          </button>
+        </div>
+
+        <p id="editStatus" class="text-[11px] text-gray-400 mb-2"></p>
+
+        <form id="editForm" onsubmit="saveEdit(event)" class="space-y-3">
+          <div>
+            <label class="block text-[11px] mb-1">Name</label>
+            <input id="editName" type="text"
+              class="w-full px-3 py-2 rounded-lg bg-neutral-900 border border-neutral-700 text-xs"
+              placeholder="Item name" />
+          </div>
+
+          <div>
+            <label class="block text-[11px] mb-1">Code</label>
+            <input id="editCode" type="text"
+              class="w-full px-3 py-2 rounded-lg bg-neutral-900 border border-neutral-700 text-xs"
+              placeholder="Item code" />
+          </div>
+
+          <div>
+            <label class="block text-[11px] mb-1">Category</label>
+            <input id="editCategory" type="text"
+              class="w-full px-3 py-2 rounded-lg bg-neutral-900 border border-neutral-700 text-xs"
+              placeholder="Category" />
+          </div>
+
+          <div class="flex gap-2">
+            <div class="flex-1">
+              <label class="block text-[11px] mb-1">Purchase Price</label>
+              <input id="editPurchasePrice" type="number" step="0.01"
+                class="w-full px-3 py-2 rounded-lg bg-neutral-900 border border-neutral-700 text-xs"
+                placeholder="0.00" />
+            </div>
+            <div class="flex-1">
+              <label class="block text-[11px] mb-1">Selling Price</label>
+              <input id="editSellingPrice" type="number" step="0.01"
+                class="w-full px-3 py-2 rounded-lg bg-neutral-900 border border-neutral-700 text-xs"
+                placeholder="0.00" />
+            </div>
+          </div>
+
+          <div class="flex gap-2">
+            <div class="flex-1">
+              <label class="block text-[11px] mb-1">Quantity</label>
+              <input id="editQty" type="number" min="0"
+                class="w-full px-3 py-2 rounded-lg bg-neutral-900 border border-neutral-700 text-xs"
+                placeholder="0" />
+            </div>
+            <div class="flex-1">
+              <label class="block text-[11px] mb-1">Min Stock Alert</label>
+              <input id="editMinStock" type="number" min="0"
+                class="w-full px-3 py-2 rounded-lg bg-neutral-900 border border-neutral-700 text-xs"
+                placeholder="0" />
+            </div>
+          </div>
+
+          <!-- Image edit -->
+          <div>
+            <label class="block text-[11px] mb-1">Image</label>
+            <div class="flex items-center gap-2">
+              <img id="editImagePreview"
+                class="w-16 h-16 rounded-xl border border-neutral-700 object-cover hidden cursor-pointer"
+                alt="Preview" />
+              <div class="flex-1">
+                <input id="editImageFile" type="file" accept="image/*" class="hidden" />
+                <button
+                  type="button"
+                  id="editChooseImageBtn"
+                  class="px-3 py-2 text-[11px] rounded-lg bg-neutral-900 border border-neutral-700 active:scale-95">
+                  Choose New Image
+                </button>
+                <p id="editFileName" class="text-[10px] text-gray-500 mt-1">
+                  No new file chosen
+                </p>
+                <p class="text-[10px] text-gray-500">
+                  Leave empty to keep current image.
+                </p>
+              </div>
+            </div>
+          </div>
+
+          <button
+            id="editSaveBtn"
+            type="submit"
+            class="w-full mt-1 py-2 rounded-lg bg-gradient-to-r from-red-600 to-yellow-500 font-semibold text-xs active:scale-95">
+            Save Changes
+          </button>
+        </form>
+      </div>
+    </div>
+  </div>
+
+  <!-- Image popup modal -->
+  <div
+    id="imageModal"
+    class="fixed inset-0 bg-black/80 flex items-center justify-center z-50 hidden"
+    onclick="closeImageModal(event)"
+  >
+    <button
+      id="closeImageBtn"
+      class="absolute top-4 right-4 text-white text-xl px-3 py-1 rounded-full bg-black/60 border border-neutral-600">
+      ✕
+    </button>
+    <img
+      id="popupImage"
+      src=""
+      class="max-w-[90vw] max-h-[80vh] rounded-2xl shadow-2xl border border-neutral-700"
+      alt="Item Large View"
+    />
+  </div>
+</body>
+</html>
